@@ -1,4 +1,4 @@
-name: Publish verified production APK
+name: Verify published CoreMDM OTA
 
 on:
   push:
@@ -21,21 +21,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Retrieve audited production build
-        env:
-          ARTIFACT_URL: 'https://sdmntprcentralus.oaiusercontent.com/files/00000000-5330-81f5-8791-bc0487ef7d01/raw?se=2026-11-06T14%3A18%3A31Z&sp=r&sv=2026-02-06&sr=b&scid=43c756fa-46c5-49af-981e-9b9a2258045d&skoid=2757bbe4-5137-4324-975b-acedc0bad279&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-11-06T03%3A13%3A05Z&ske=2026-11-07T03%3A13%3A05Z&sks=b&skv=2026-02-06&sig=YlOwmyAzoYtyD/suLIU3yoPFkoDumrBJv22uHN4Rq64%3D'
+      - name: Retrieve production OTA APK
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 "$ARTIFACT_URL" --output candidate.zip
-          echo 'bed1c0debe08a00cabf639f16d9b796ec346f11c6f014129208c270bfd317686  candidate.zip' | sha256sum -c -
           mkdir candidate
-          unzip -q candidate.zip -d candidate
+          curl --fail --location --retry 3 https://github.com/coremdm/releases/releases/download/v0.9.12/app-release.apk --output candidate/app-release.apk
       - name: Verify production signature, package and increasing version
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo 'b571409bfae386d327d4023740d32e585f7bf00922f7db769f16e067bae5c345  candidate/app-release.apk' | sha256sum -c -
+          echo '7623736dee9fc25f93685c884549521c6a63efb218c783c9c57e99229fd1de28  candidate/app-release.apk' | sha256sum -c -
           mkdir previous
           gh release download v0.9.11 --repo coremdm/releases --pattern app-release.apk --dir previous
           tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
@@ -60,7 +56,7 @@ jobs:
           latest = pathlib.Path('latest-tag.txt').read_text().strip()
           assert tuple(map(int, latest.removeprefix('v').split('.'))) <= (0,9,12), 'A newer release already exists'
           sha = hashlib.sha256(pathlib.Path('candidate/app-release.apk').read_bytes()).hexdigest()
-          report = f'CoreMDM OTA 0.9.12\nPackage: {current[0]}\nVersion code: {previous[1]} -> {current[1]}\nProduction signer SHA-256: {expected}\nAPK SHA-256: {sha}\nSigned build source: coremdm/coremdm@692deb8e33dfa2b91b83955eb86fd67f35822ae3\nSigned build run: 42228705728\nProduction signing key is used only in coremdm/coremdm CI.\n'
+          report = f'CoreMDM OTA 0.9.12\nPackage: {current[0]}\nVersion code: {previous[1]} -> {current[1]}\nProduction signer SHA-256: {expected}\nAPK SHA-256: {sha}\nSigned build source: coremdm/coremdm@692deb8e33dfa2b91b83955eb86fd67f35822ae3\nSigned build run: 42230973981\nProduction signing key is used only in coremdm/coremdm CI.\n'
           pathlib.Path('ota-verification.txt').write_text(report)
           print(report)
           PY
@@ -77,5 +73,6 @@ jobs:
           else
             gh release create v0.9.12 candidate/app-release.apk ota-verification.txt --repo coremdm/releases --title 'CoreMDM v0.9.12' --notes-file release-notes.txt --latest
           fi
+          gh release upload v0.9.12 ota-verification.txt --repo coremdm/releases --clobber
           cat ota-verification.txt >> "$GITHUB_STEP_SUMMARY"
           echo 'OTA download: https://github.com/coremdm/releases/releases/download/v0.9.12/app-release.apk' >> "$GITHUB_STEP_SUMMARY"
