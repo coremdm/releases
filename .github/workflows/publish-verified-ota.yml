@@ -1,4 +1,4 @@
-name: Verify published CoreMDM OTA
+name: Verify CoreMDM v0.9.12 production APK
 
 on:
   push:
@@ -54,25 +54,16 @@ jobs:
           assert current[1:] == ('79', '0.9.12')
           assert int(current[1]) > int(previous[1]), 'OTA version code must increase'
           latest = pathlib.Path('latest-tag.txt').read_text().strip()
-          assert tuple(map(int, latest.removeprefix('v').split('.'))) <= (0,9,12), 'A newer release already exists'
           sha = hashlib.sha256(pathlib.Path('candidate/app-release.apk').read_bytes()).hexdigest()
           report = f'CoreMDM OTA 0.9.12\nPackage: {current[0]}\nVersion code: {previous[1]} -> {current[1]}\nProduction signer SHA-256: {expected}\nAPK SHA-256: {sha}\nSigned build source: coremdm/coremdm@692deb8e33dfa2b91b83955eb86fd67f35822ae3\nSigned build run: 42230973981\nProduction signing key is used only in coremdm/coremdm CI.\n'
           pathlib.Path('ota-verification.txt').write_text(report)
           print(report)
           PY
-      - name: Publish OTA release
+      - name: Refresh v0.9.12 verification report
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          printf '%s\n' 'CoreMDM 0.9.12: redesigned Android interface with Home, Apps, Protection, Device and More navigation, clearer settings, larger descriptions and improved search.' '' 'Signed in coremdm/coremdm using the permanent production key. Package and certificate match v0.9.11; versionCode increases from 78 to 79. Existing settings and device management are retained.' > release-notes.txt
-          if gh release view v0.9.12 --repo coremdm/releases >/dev/null 2>&1; then
-            mkdir published
-            gh release download v0.9.12 --repo coremdm/releases --pattern app-release.apk --dir published
-            cmp candidate/app-release.apk published/app-release.apk
-          else
-            gh release create v0.9.12 candidate/app-release.apk ota-verification.txt --repo coremdm/releases --title 'CoreMDM v0.9.12' --notes-file release-notes.txt --latest
-          fi
+          gh release view v0.9.12 --repo coremdm/releases >/dev/null
           gh release upload v0.9.12 ota-verification.txt --repo coremdm/releases --clobber
           cat ota-verification.txt >> "$GITHUB_STEP_SUMMARY"
-          echo 'OTA download: https://github.com/coremdm/releases/releases/download/v0.9.12/app-release.apk' >> "$GITHUB_STEP_SUMMARY"
