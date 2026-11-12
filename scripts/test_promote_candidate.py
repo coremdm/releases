@@ -7,12 +7,22 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from promote_candidate import api_environment, extract_candidate, validate_provenance, validate_report, validate_request, CERTIFICATE
+from promote_candidate import api_environment, extract_candidate, validate_provenance, validate_report, validate_request, validate_public_transfer, CERTIFICATE
 
 REQUEST = json.loads((pathlib.Path(__file__).parent.parent / 'promotion-request.json').read_text())
 
 
 class PromotionSafeguards(unittest.TestCase):
+    def test_public_transport_is_limited_to_the_canonical_release_bucket_and_receipt(self):
+        request = dict(REQUEST, transport='firebase-public-release-artifact', bucket='techeaz-core-mdm.firebasestorage.app',
+                       stagingCommit='a' * 40, objectName='ota-candidates/v0.9.50/test/verified-candidate.zip',
+                       artifactUrl='https://firebasestorage.googleapis.com/v0/b/techeaz-core-mdm.firebasestorage.app/o/ota-candidates%2Fv0.9.50%2Ftest%2Fverified-candidate.zip?alt=media&token=00000000-0000-0000-0000-000000000000')
+        validate_public_transfer(request)
+        for changes in ({'artifactUrl': 'https://example.org/payload'}, {'bucket': 'someone-else'},
+                        {'stagingCommit': ''}, {'objectName': '../unexpected'}, {'transport': 'arbitrary-url'}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_public_transfer(dict(request, **changes))
+
     def test_private_read_credential_is_never_used_for_release_writes(self):
         with patch.dict('os.environ', {'GH_TOKEN': 'release-token', 'SOURCE_ARTIFACTS_TOKEN': 'read-only-source-token'}, clear=True):
             self.assertEqual(api_environment('repos/coremdm/coremdm/actions/artifacts/1')['GH_TOKEN'], 'read-only-source-token')

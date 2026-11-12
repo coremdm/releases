@@ -6,6 +6,8 @@ import pathlib
 import re
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 import zipfile
 
 SOURCE = 'coremdm/coremdm'
@@ -63,6 +65,21 @@ def validate_report(report, request):
     require(all(report.get(key) == value for key, value in expected.items()), 'Candidate report disagrees with the release request')
 
 
+def validate_public_transfer(request):
+    require(request.get('transport') == 'firebase-public-release-artifact', 'Unexpected transfer transport')
+    require(request.get('bucket') == 'techeaz-core-mdm.firebasestorage.app', 'Unexpected public artifact bucket')
+    require(isinstance(request.get('stagingCommit'), str) and re.fullmatch('[0-9a-f]{40}', request['stagingCommit']), 'Canonical staging receipt is not pinned')
+    object_name = request.get('objectName', '')
+    require(object_name.startswith('ota-candidates/' + request['tag'] + '/') and '..' not in object_name.split('/'), 'Unexpected public artifact object')
+    url = urllib.parse.urlparse(request.get('artifactUrl', ''))
+    require(url.scheme == 'https' and url.hostname == 'firebasestorage.googleapis.com' and url.port in (None, 443)
+            and url.username is None and url.password is None and not url.fragment, 'Unexpected transfer origin')
+    require(urllib.parse.unquote(url.path) == '/v0/b/' + request['bucket'] + '/o/' + object_name, 'Public transfer path disagrees with the receipt')
+    query = urllib.parse.parse_qs(url.query)
+    require(set(query) == {'alt', 'token'} and query['alt'] == ['media'] and len(query['token']) == 1
+            and re.fullmatch('[0-9a-fA-F-]{36}', query['token'][0]), 'Unexpected public artifact download parameters')
+
+
 def gh_json(endpoint):
     return json.loads(subprocess.check_output(['gh', 'api', endpoint], text=True, env=api_environment(endpoint)))
 
@@ -79,18 +96,30 @@ def main(request_path, verifier):
     request = json.loads(request_path.read_text(encoding='utf-8'))
     validate_request(request)
     require(os.environ.get('GITHUB_REPOSITORY') == DISTRIBUTION, 'Publication must run in the releases repository')
-    artifact = gh_json(f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}')
-    verification = gh_json(f'repos/{SOURCE}/actions/runs/{request["verificationRun"]}')
-    build = gh_json(f'repos/{SOURCE}/actions/runs/{request["sourceBuildRun"]}')
-    validate_provenance(request, artifact, verification, build)
+    public_transfer = request.get('transport') == 'firebase-public-release-artifact'
+    if public_transfer:
+        validate_public_transfer(request)
+    else:
+        artifact = gh_json(f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}')
+        verification = gh_json(f'repos/{SOURCE}/actions/runs/{request["verificationRun"]}')
+        build = gh_json(f'repos/{SOURCE}/actions/runs/{request["sourceBuildRun"]}')
+        validate_provenance(request, artifact, verification, build)
     latest = gh_json(f'repos/{DISTRIBUTION}/releases/latest')
     require(latest.get('tag_name') == request['previousTag'], 'The production release changed; review a new promotion request')
     work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'coremdm-promotion'
     work.mkdir()
     archive = work / 'candidate.zip'
     with archive.open('wb') as output:
-        endpoint = f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}/zip'
-        subprocess.run(['gh', 'api', endpoint], stdout=output, check=True, env=api_environment(endpoint))
+        if public_transfer:
+            with urllib.request.urlopen(request['artifactUrl'], timeout=60) as response:
+                downloaded = 0
+                while chunk := response.read(1024 * 1024):
+                    downloaded += len(chunk)
+                    require(downloaded <= 100_000_000, 'Transfer archive is too large')
+                    output.write(chunk)
+        else:
+            endpoint = f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}/zip'
+            subprocess.run(['gh', 'api', endpoint], stdout=output, check=True, env=api_environment(endpoint))
     candidate = work / 'candidate'
     extract_candidate(archive, request['artifactDigest'], candidate)
     report = json.loads((candidate / 'ota-verification.json').read_text(encoding='utf-8'))
@@ -117,6 +146,13 @@ def main(request_path, verifier):
     require(release.get('draft') is True and {a['name'] for a in release['assets']} == {'app-release.apk', 'ota-verification.json'}, 'Draft upload is incomplete')
     require(next(a for a in release['assets'] if a['name'] == 'app-release.apk')['size'] == (candidate / 'app-release.apk').stat().st_size, 'Uploaded APK size changed')
     subprocess.run(['gh', 'release', 'edit', request['tag'], '--repo', DISTRIBUTION, '--draft=false', '--latest'], check=True)
+    published = gh_json(f'repos/{DISTRIBUTION}/releases/tags/{request["tag"]}')
+    require(published.get('draft') is False and published.get('tag_name') == request['tag'], 'Release was not published')
+    published_files = work / 'published'
+    published_files.mkdir()
+    subprocess.run(['gh', 'release', 'download', request['tag'], '--repo', DISTRIBUTION, '--dir', str(published_files)], check=True)
+    for name in ('app-release.apk', 'ota-verification.json'):
+        require(hashlib.sha256((published_files / name).read_bytes()).digest() == hashlib.sha256((candidate / name).read_bytes()).digest(), 'Published asset bytes do not match the verified candidate')
     print('Published verified production OTA ' + request['tag'])
 
 
