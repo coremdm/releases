@@ -1,69 +1,55 @@
-name: Verify CoreMDM v0.9.12 production APK
+name: Verify a published CoreMDM OTA
 
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/publish-verified-ota.yml']
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing release tag, for example v0.9.50'
+        required: true
+        type: string
 
 permissions:
-  contents: write
-
-concurrency:
-  group: publish-coremdm-ota-0.9.12
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Retrieve production OTA APK
+      - name: Verify the published production build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag'; exit 1; }
           mkdir candidate
-          curl --fail --location --retry 3 https://github.com/coremdm/releases/releases/download/v0.9.12/app-release.apk --output candidate/app-release.apk
-      - name: Verify production signature, package and increasing version
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          echo '7623736dee9fc25f93685c884549521c6a63efb218c783c9c57e99229fd1de28  candidate/app-release.apk' | sha256sum -c -
-          mkdir previous
-          gh release download v0.9.11 --repo coremdm/releases --pattern app-release.apk --dir previous
+          gh release download "$RELEASE_TAG" --repo coremdm/releases --pattern app-release.apk --dir candidate
+          gh release download "$RELEASE_TAG" --repo coremdm/releases --pattern ota-verification.json --dir candidate
           tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
-          "$tools/apksigner" verify --print-certs previous/app-release.apk > previous-cert.txt
-          "$tools/apksigner" verify --print-certs candidate/app-release.apk > candidate-cert.txt
-          "$tools/aapt" dump badging previous/app-release.apk > previous-package.txt
-          "$tools/aapt" dump badging candidate/app-release.apk > candidate-package.txt
-          gh api repos/coremdm/releases/releases/latest --jq .tag_name > latest-tag.txt
+          "$tools/apksigner" verify --print-certs candidate/app-release.apk > candidate/certificates.txt
+          "$tools/aapt" dump badging candidate/app-release.apk > candidate/package.txt
           python3 - <<'PY'
-          import pathlib, re, hashlib
-          def signer(path):
-              return re.search(r'certificate SHA-256 digest: ([0-9a-f]+)', pathlib.Path(path).read_text()).group(1)
-          expected = '432840faf7c8019bcbc4ee39dd9594f3568f5d0422f94242b27bee45804837ea'
-          assert signer('previous-cert.txt') == signer('candidate-cert.txt') == expected, 'Production certificate mismatch'
-          def package(path):
-              return re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", pathlib.Path(path).read_text()).groups()
-          previous = package('previous-package.txt')
-          current = package('candidate-package.txt')
-          assert previous[0] == current[0] == 'com.core.mdm'
-          assert current[1:] == ('79', '0.9.12')
-          assert int(current[1]) > int(previous[1]), 'OTA version code must increase'
-          latest = pathlib.Path('latest-tag.txt').read_text().strip()
-          sha = hashlib.sha256(pathlib.Path('candidate/app-release.apk').read_bytes()).hexdigest()
-          report = f'CoreMDM OTA 0.9.12\nPackage: {current[0]}\nVersion code: {previous[1]} -> {current[1]}\nProduction signer SHA-256: {expected}\nAPK SHA-256: {sha}\nSigned build source: coremdm/coremdm@692deb8e33dfa2b91b83955eb86fd67f35822ae3\nSigned build run: 42230973981\nProduction signing key is used only in coremdm/coremdm CI.\n'
-          pathlib.Path('ota-verification.txt').write_text(report)
-          print(report)
+          import hashlib, json, os, pathlib, re
+          root = pathlib.Path('candidate')
+          report = json.loads((root / 'ota-verification.json').read_text())
+          cert = '432840faf7c8019bcbc4ee39dd9594f3568f5d0422f94242b27bee45804837ea'
+          signers = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-f]+)', (root / 'certificates.txt').read_text())
+          assert signers == report['certificates'] == [cert], 'Production signing certificate mismatch'
+          metadata = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", (root / 'package.txt').read_text())
+          assert metadata, 'Package metadata missing'
+          package, code, name = metadata.groups()
+          assert package == report['package'] == 'com.core.mdm', 'Package mismatch'
+          assert int(code) == report['versionCode'] > report['previousVersionCode'], 'Version code does not increase'
+          assert report['tag'] == os.environ['RELEASE_TAG'] == 'v' + name, 'Release tag mismatch'
+          assert name == report['versionName'], 'Version name mismatch'
+          assert report['sourceRepository'] == 'coremdm/coremdm', 'Incorrect signing source repository'
+          assert report['distributionRepository'] == 'coremdm/releases', 'Incorrect distribution repository'
+          assert re.fullmatch('[0-9a-f]{40}', report['sourceCommit']), 'Source commit missing'
+          assert hashlib.sha256((root / 'app-release.apk').read_bytes()).hexdigest() == report['sha256'], 'APK integrity mismatch'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"Verified {report['tag']} - {package} - version code {code}\nProduction signer: {cert}\n")
           PY
-      - name: Refresh v0.9.12 verification report
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release view v0.9.12 --repo coremdm/releases >/dev/null
-          gh release upload v0.9.12 ota-verification.txt --repo coremdm/releases --clobber
-          cat ota-verification.txt >> "$GITHUB_STEP_SUMMARY"
