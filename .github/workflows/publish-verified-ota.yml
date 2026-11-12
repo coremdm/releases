@@ -39,7 +39,8 @@ jobs:
           root = pathlib.Path('candidate')
           report = json.loads((root / 'ota-verification.json').read_text())
           cert = '432840faf7c8019bcbc4ee39dd9594f3568f5d0422f94242b27bee45804837ea'
-          signers = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-f]+)', (root / 'certificates.txt').read_text())
+          pattern = r'^(?:Signer #\d+|V[1-4](?:\.\d+)? Signer(?: #\d+)?):? certificate SHA-256 digest: ([0-9a-fA-F]{64})\s*$'
+          signers = list(dict.fromkeys(s.lower() for s in re.findall(pattern, (root / 'certificates.txt').read_text(), re.MULTILINE)))
           assert signers == report['certificates'] == [cert], 'Production signing certificate mismatch'
           metadata = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", (root / 'package.txt').read_text())
           assert metadata, 'Package metadata missing'
@@ -55,4 +56,3 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(f"Verified {report['tag']} - {package} - version code {code}\nProduction signer: {cert}\n")
           PY
-
