@@ -1,0 +1,12 @@
+{
+  "tag": "v0.9.50",
+  "versionCode": 115,
+  "previousTag": "v0.9.49",
+  "previousVersionCode": 114,
+  "sourceCommit": "4002353da3466d4907b8bc68b32072099ce4ec2c",
+  "sourceBuildRun": 43223201487,
+  "verifierCommit": "a765da3be98eb5a8376670e246179a8937d81cd1",
+  "verificationRun": 43225978563,
+  "artifactId": 13948036759,
+  "artifactDigest": "sha256:1fc29ecf608fc586f5be4de401c44898e6fb0d93f5301adce41dc62c6ff553ad"
+}

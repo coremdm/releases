@@ -1,0 +1,42 @@
+name: Promote verified canonical OTA candidate
+
+on:
+  push:
+    branches: [main]
+    paths: ['promotion-request.json', '.github/workflows/promote-verified-candidate.yml', 'scripts/promote_candidate.py']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: promote-production-coremdm-ota
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.repository == 'coremdm/releases'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: coremdm/coremdm
+          ref: a765da3be98eb5a8376670e246179a8937d81cd1
+          path: canonical-verifier
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Test promotion safeguards
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Reverify and publish the pinned signed artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/promote_candidate.py promotion-request.json canonical-verifier/scripts/verify_ota.py
+
+      # The repository token publishes only here. No signing keys or cross-repository PAT are used.

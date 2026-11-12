@@ -1,0 +1,115 @@
+"""Promote an immutable, verified canonical build using only the release repo token."""
+import hashlib
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import zipfile
+
+SOURCE = 'coremdm/coremdm'
+DISTRIBUTION = 'coremdm/releases'
+VERIFIER = 'a765da3be98eb5a8376670e246179a8937d81cd1'
+CERTIFICATE = '432840faf7c8019bcbc4ee39dd9594f3568f5d0422f94242b27bee45804837ea'
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def validate_request(request):
+    for key in ('tag', 'previousTag'):
+        require(isinstance(request.get(key), str) and re.fullmatch(r'v\d+\.\d+\.\d+', request[key]), 'Invalid release tag')
+    for key in ('sourceCommit', 'verifierCommit'):
+        require(isinstance(request.get(key), str) and re.fullmatch('[0-9a-f]{40}', request[key]), 'Invalid pinned commit')
+    require(request['verifierCommit'] == VERIFIER, 'Unexpected verifier source')
+    for key in ('versionCode', 'previousVersionCode', 'sourceBuildRun', 'verificationRun', 'artifactId'):
+        require(type(request.get(key)) is int and request[key] > 0, 'Invalid version or run identifier')
+    require(request['versionCode'] > request['previousVersionCode'], 'Candidate must increase the version code')
+    require(isinstance(request.get('artifactDigest'), str) and re.fullmatch('sha256:[0-9a-f]{64}', request['artifactDigest']), 'Missing pinned artifact digest')
+
+
+def validate_provenance(request, artifact, verification, build):
+    for run, run_id, commit in ((verification, request['verificationRun'], request['verifierCommit']),
+                                (build, request['sourceBuildRun'], request['sourceCommit'])):
+        require(run.get('id') == run_id and run.get('repository', {}).get('full_name') == SOURCE, 'Unexpected build repository or run')
+        require(run.get('head_sha') == commit and run.get('head_branch') == 'main' and run.get('event') == 'push', 'Unexpected source commit or event')
+        require(run.get('status') == 'completed' and run.get('conclusion') == 'success', 'Source validation did not pass')
+    require(artifact.get('id') == request['artifactId'] and artifact.get('name') == 'verified-ota-candidate', 'Unexpected artifact identity')
+    require(artifact.get('expired') is False and artifact.get('digest') == request['artifactDigest'], 'Artifact expired or changed')
+    require(artifact.get('workflow_run', {}).get('id') == request['verificationRun'], 'Artifact belongs to another run')
+
+
+def extract_candidate(archive, digest, destination):
+    require('sha256:' + hashlib.sha256(archive.read_bytes()).hexdigest() == digest, 'Downloaded archive does not match the pinned digest')
+    with zipfile.ZipFile(archive) as bundle:
+        files = [entry for entry in bundle.infolist() if not entry.is_dir()]
+        apks = [entry for entry in files if entry.filename in ('app-release.apk', 'candidate/app-release.apk')]
+        reports = [entry for entry in files if entry.filename == 'ota-verification.json']
+        require(len(files) == 2 and len(apks) == 1 and len(reports) == 1, 'Unexpected candidate archive contents')
+        require(apks[0].file_size <= 100_000_000 and reports[0].file_size <= 64_000, 'Candidate archive is too large')
+        destination.mkdir(parents=True, exist_ok=True)
+        for entry, name in ((apks[0], 'app-release.apk'), (reports[0], 'ota-verification.json')):
+            (destination / name).write_bytes(bundle.read(entry))
+
+
+def validate_report(report, request):
+    expected = dict(tag=request['tag'], versionName=request['tag'][1:], versionCode=request['versionCode'],
+                    previousVersionCode=request['previousVersionCode'], sourceCommit=request['sourceCommit'],
+                    sourceRepository=SOURCE, distributionRepository=DISTRIBUTION, package='com.core.mdm',
+                    certificates=[CERTIFICATE])
+    require(all(report.get(key) == value for key, value in expected.items()), 'Candidate report disagrees with the release request')
+
+
+def gh_json(endpoint):
+    return json.loads(subprocess.check_output(['gh', 'api', endpoint], text=True))
+
+
+def main(request_path, verifier):
+    request = json.loads(request_path.read_text(encoding='utf-8'))
+    validate_request(request)
+    require(os.environ.get('GITHUB_REPOSITORY') == DISTRIBUTION, 'Publication must run in the releases repository')
+    artifact = gh_json(f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}')
+    verification = gh_json(f'repos/{SOURCE}/actions/runs/{request["verificationRun"]}')
+    build = gh_json(f'repos/{SOURCE}/actions/runs/{request["sourceBuildRun"]}')
+    validate_provenance(request, artifact, verification, build)
+    latest = gh_json(f'repos/{DISTRIBUTION}/releases/latest')
+    require(latest.get('tag_name') == request['previousTag'], 'The production release changed; review a new promotion request')
+    work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'coremdm-promotion'
+    work.mkdir()
+    archive = work / 'candidate.zip'
+    with archive.open('wb') as output:
+        subprocess.run(['gh', 'api', f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}/zip'], stdout=output, check=True)
+    candidate = work / 'candidate'
+    extract_candidate(archive, request['artifactDigest'], candidate)
+    report = json.loads((candidate / 'ota-verification.json').read_text(encoding='utf-8'))
+    validate_report(report, request)
+    previous = work / 'previous'
+    previous.mkdir()
+    subprocess.run(['gh', 'release', 'download', request['previousTag'], '--repo', DISTRIBUTION,
+                    '--pattern', 'app-release.apk', '--dir', str(previous)], check=True)
+    tools = sorted((pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools').iterdir(),
+                   key=lambda p: tuple(int(n) for n in re.findall(r'\d+', p.name)))[-1]
+    independent = work / 'independent-verification.json'
+    subprocess.run([sys.executable, str(verifier), '--tools', str(tools), '--apk', str(candidate / 'app-release.apk'),
+                    '--previous', str(previous / 'app-release.apk'), '--tag', request['tag'],
+                    '--source', request['sourceCommit'], '--report', str(independent)], check=True)
+    require(json.loads(independent.read_text()) == report, 'Independent APK verification disagrees with the build report')
+    notes = work / 'release-notes.md'
+    notes.write_text(f'Production-signed CoreMDM {request["tag"]}, version code {request["versionCode"]}.\n\n'
+                     f'Source: https://github.com/{SOURCE}/commit/{request["sourceCommit"]}\n\n'
+                     'Package, production signer, artifact integrity and increasing OTA version verified before publication.\n', encoding='utf-8')
+    subprocess.run(['gh', 'release', 'create', request['tag'], '--repo', DISTRIBUTION, '--target', os.environ['GITHUB_SHA'],
+                    '--draft', '--title', 'CoreMDM ' + request['tag'], '--notes-file', str(notes),
+                    str(candidate / 'app-release.apk'), str(candidate / 'ota-verification.json')], check=True)
+    release = gh_json(f'repos/{DISTRIBUTION}/releases/tags/{request["tag"]}')
+    require(release.get('draft') is True and {a['name'] for a in release['assets']} == {'app-release.apk', 'ota-verification.json'}, 'Draft upload is incomplete')
+    require(next(a for a in release['assets'] if a['name'] == 'app-release.apk')['size'] == (candidate / 'app-release.apk').stat().st_size, 'Uploaded APK size changed')
+    subprocess.run(['gh', 'release', 'edit', request['tag'], '--repo', DISTRIBUTION, '--draft=false', '--latest'], check=True)
+    print('Published verified production OTA ' + request['tag'])
+
+
+if __name__ == '__main__':
+    main(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]))
