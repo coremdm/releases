@@ -1,9 +1,6 @@
 name: Promote verified canonical OTA candidate
 
 on:
-  push:
-    branches: [main]
-    paths: ['promotion-request.json', '.github/workflows/promote-verified-candidate.yml', 'scripts/promote_candidate.py']
   workflow_dispatch: {}
 
 permissions:
@@ -22,9 +19,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Test promotion safeguards
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Require read access to private canonical artifacts
+        env:
+          SOURCE_ARTIFACTS_TOKEN: ${{ secrets.SOURCE_ARTIFACTS_TOKEN }}
+        run: |
+          test -n "$SOURCE_ARTIFACTS_TOKEN" || { echo '::error::Canonical artifacts are private. Supply SOURCE_ARTIFACTS_TOKEN with read-only contents/actions access, or restore the existing main-repository publishing PAT and use its release workflow.'; exit 1; }
       - uses: actions/checkout@v4
         with:
           repository: coremdm/coremdm
+          token: ${{ secrets.SOURCE_ARTIFACTS_TOKEN }}
           ref: a765da3be98eb5a8376670e246179a8937d81cd1
           path: canonical-verifier
           persist-credentials: false
@@ -32,11 +37,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Test promotion safeguards
-        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Reverify and publish the pinned signed artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_ARTIFACTS_TOKEN: ${{ secrets.SOURCE_ARTIFACTS_TOKEN }}
         run: python3 scripts/promote_candidate.py promotion-request.json canonical-verifier/scripts/verify_ota.py
 
-      # The repository token publishes only here. No signing keys or cross-repository PAT are used.
+      # Publication uses the repository token. Canonical artifacts use a separate read-only token.
+      # No signing keys or cross-repository publication permissions belong here.

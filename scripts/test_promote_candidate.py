@@ -4,14 +4,22 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
-from promote_candidate import extract_candidate, validate_provenance, validate_report, validate_request, CERTIFICATE
+from promote_candidate import api_environment, extract_candidate, validate_provenance, validate_report, validate_request, CERTIFICATE
 
 REQUEST = json.loads((pathlib.Path(__file__).parent.parent / 'promotion-request.json').read_text())
 
 
 class PromotionSafeguards(unittest.TestCase):
+    def test_private_read_credential_is_never_used_for_release_writes(self):
+        with patch.dict('os.environ', {'GH_TOKEN': 'release-token', 'SOURCE_ARTIFACTS_TOKEN': 'read-only-source-token'}, clear=True):
+            self.assertEqual(api_environment('repos/coremdm/coremdm/actions/artifacts/1')['GH_TOKEN'], 'read-only-source-token')
+            self.assertEqual(api_environment('repos/coremdm/releases/releases/latest')['GH_TOKEN'], 'release-token')
+        with patch.dict('os.environ', {'GH_TOKEN': 'release-token'}, clear=True), self.assertRaises(ValueError):
+            api_environment('repos/coremdm/coremdm/actions/artifacts/1')
+
     def test_request_rejects_invalid_versions_commits_and_artifact_pins(self):
         validate_request(REQUEST)
         for changes in ({'versionCode': 114}, {'sourceCommit': 'main'}, {'verifierCommit': 'b' * 40},

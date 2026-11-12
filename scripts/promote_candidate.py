@@ -64,7 +64,15 @@ def validate_report(report, request):
 
 
 def gh_json(endpoint):
-    return json.loads(subprocess.check_output(['gh', 'api', endpoint], text=True))
+    return json.loads(subprocess.check_output(['gh', 'api', endpoint], text=True, env=api_environment(endpoint)))
+
+
+def api_environment(endpoint):
+    environment = os.environ.copy()
+    if endpoint.startswith(f'repos/{SOURCE}/'):
+        require(bool(environment.get('SOURCE_ARTIFACTS_TOKEN')), 'Private canonical artifacts require SOURCE_ARTIFACTS_TOKEN with read-only contents/actions access')
+        environment['GH_TOKEN'] = environment['SOURCE_ARTIFACTS_TOKEN']
+    return environment
 
 
 def main(request_path, verifier):
@@ -81,7 +89,8 @@ def main(request_path, verifier):
     work.mkdir()
     archive = work / 'candidate.zip'
     with archive.open('wb') as output:
-        subprocess.run(['gh', 'api', f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}/zip'], stdout=output, check=True)
+        endpoint = f'repos/{SOURCE}/actions/artifacts/{request["artifactId"]}/zip'
+        subprocess.run(['gh', 'api', endpoint], stdout=output, check=True, env=api_environment(endpoint))
     candidate = work / 'candidate'
     extract_candidate(archive, request['artifactDigest'], candidate)
     report = json.loads((candidate / 'ota-verification.json').read_text(encoding='utf-8'))
