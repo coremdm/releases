@@ -3,7 +3,7 @@ name: Publish canonical production-signed OTA
 on:
   push:
     branches: [main]
-    paths: ['public-promotion-request.json', '.github/workflows/promote-public-candidate.yml']
+    paths: ['public-promotion-request.json', '.github/workflows/promote-public-candidate.yml', 'scripts/promote_candidate.py', 'scripts/verify_ota.py']
   workflow_dispatch: {}
 
 permissions:

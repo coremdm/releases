@@ -7,12 +7,30 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from promote_candidate import api_environment, extract_candidate, validate_provenance, validate_report, validate_request, validate_public_transfer, CERTIFICATE
+from promote_candidate import api_environment, extract_candidate, find_release, validate_release_assets, validate_provenance, validate_report, validate_request, validate_public_transfer, CERTIFICATE
 
 REQUEST = json.loads((pathlib.Path(__file__).parent.parent / 'promotion-request.json').read_text())
 
 
 class PromotionSafeguards(unittest.TestCase):
+    def test_draft_lookup_and_upload_completeness_do_not_require_an_existing_git_tag(self):
+        draft = {'id': 42, 'draft': True, 'tag_name': 'v0.9.50'}
+        self.assertEqual(find_release([draft], 'v0.9.50'), draft)
+        self.assertIsNone(find_release([draft], 'v0.9.51'))
+        with self.assertRaises(ValueError):
+            find_release([draft, dict(draft, id=43)], 'v0.9.50')
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = pathlib.Path(directory)
+            (candidate / 'app-release.apk').write_bytes(b'apk')
+            (candidate / 'ota-verification.json').write_bytes(b'{}')
+            release = dict(draft, assets=[{'name': 'app-release.apk', 'size': 3}, {'name': 'ota-verification.json', 'size': 2}])
+            validate_release_assets(release, candidate)
+            with self.assertRaises(ValueError):
+                validate_release_assets(dict(release, assets=release['assets'][:1]), candidate)
+            release['assets'][0]['size'] = 4
+            with self.assertRaises(ValueError):
+                validate_release_assets(release, candidate)
+
     def test_public_transport_is_limited_to_the_canonical_release_bucket_and_receipt(self):
         request = dict(REQUEST, transport='firebase-public-release-artifact', bucket='techeaz-core-mdm.firebasestorage.app',
                        stagingCommit='a' * 40, objectName='ota-candidates/v0.9.50/test/verified-candidate.zip',

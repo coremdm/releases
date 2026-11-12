@@ -92,6 +92,18 @@ def api_environment(endpoint):
     return environment
 
 
+def find_release(releases, tag):
+    matches = [release for release in releases if release.get('tag_name') == tag]
+    require(len(matches) <= 1, 'Multiple releases claim the requested version')
+    return matches[0] if matches else None
+
+
+def validate_release_assets(release, candidate):
+    require({asset['name'] for asset in release.get('assets', [])} == {'app-release.apk', 'ota-verification.json'}, 'Release upload is incomplete')
+    for asset in release['assets']:
+        require(asset['size'] == (candidate / asset['name']).stat().st_size, 'Uploaded candidate asset size changed')
+
+
 def main(request_path, verifier):
     request = json.loads(request_path.read_text(encoding='utf-8'))
     validate_request(request)
@@ -105,7 +117,7 @@ def main(request_path, verifier):
         build = gh_json(f'repos/{SOURCE}/actions/runs/{request["sourceBuildRun"]}')
         validate_provenance(request, artifact, verification, build)
     latest = gh_json(f'repos/{DISTRIBUTION}/releases/latest')
-    require(latest.get('tag_name') == request['previousTag'], 'The production release changed; review a new promotion request')
+    require(latest.get('tag_name') in (request['previousTag'], request['tag']), 'The production release changed; review a new promotion request')
     work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'coremdm-promotion'
     work.mkdir()
     archive = work / 'candidate.zip'
@@ -139,14 +151,25 @@ def main(request_path, verifier):
     notes.write_text(f'Production-signed CoreMDM {request["tag"]}, version code {request["versionCode"]}.\n\n'
                      f'Source: https://github.com/{SOURCE}/commit/{request["sourceCommit"]}\n\n'
                      'Package, production signer, artifact integrity and increasing OTA version verified before publication.\n', encoding='utf-8')
-    subprocess.run(['gh', 'release', 'create', request['tag'], '--repo', DISTRIBUTION, '--target', os.environ['GITHUB_SHA'],
-                    '--draft', '--title', 'CoreMDM ' + request['tag'], '--notes-file', str(notes),
-                    str(candidate / 'app-release.apk'), str(candidate / 'ota-verification.json')], check=True)
-    release = gh_json(f'repos/{DISTRIBUTION}/releases/tags/{request["tag"]}')
-    require(release.get('draft') is True and {a['name'] for a in release['assets']} == {'app-release.apk', 'ota-verification.json'}, 'Draft upload is incomplete')
-    require(next(a for a in release['assets'] if a['name'] == 'app-release.apk')['size'] == (candidate / 'app-release.apk').stat().st_size, 'Uploaded APK size changed')
-    subprocess.run(['gh', 'release', 'edit', request['tag'], '--repo', DISTRIBUTION, '--draft=false', '--latest'], check=True)
-    published = gh_json(f'repos/{DISTRIBUTION}/releases/tags/{request["tag"]}')
+    release = find_release(gh_json(f'repos/{DISTRIBUTION}/releases?per_page=100'), request['tag'])
+    if release is None:
+        subprocess.run(['gh', 'release', 'create', request['tag'], '--repo', DISTRIBUTION, '--target', os.environ['GITHUB_SHA'],
+                        '--draft', '--title', 'CoreMDM ' + request['tag'], '--notes-file', str(notes),
+                        str(candidate / 'app-release.apk'), str(candidate / 'ota-verification.json')], check=True)
+        release = find_release(gh_json(f'repos/{DISTRIBUTION}/releases?per_page=100'), request['tag'])
+    require(release is not None, 'Uploaded release draft was not found')
+    validate_release_assets(release, candidate)
+    # Drafts may not have a Git tag yet. Address draft/assets by their IDs, not the tag endpoint.
+    for asset in release['assets']:
+        downloaded = work / ('uploaded-' + asset['name'])
+        with downloaded.open('wb') as output:
+            subprocess.run(['gh', 'api', '-H', 'Accept: application/octet-stream', f'repos/{DISTRIBUTION}/releases/assets/{asset["id"]}'], stdout=output, check=True)
+        require(hashlib.sha256(downloaded.read_bytes()).digest() == hashlib.sha256((candidate / asset['name']).read_bytes()).digest(), 'Uploaded release asset bytes changed')
+    if release.get('draft') is True:
+        publication = work / 'publish.json'
+        publication.write_text(json.dumps({'draft': False, 'make_latest': 'true'}), encoding='utf-8')
+        subprocess.run(['gh', 'api', '--method', 'PATCH', f'repos/{DISTRIBUTION}/releases/{release["id"]}', '--input', str(publication)], stdout=subprocess.DEVNULL, check=True)
+    published = gh_json(f'repos/{DISTRIBUTION}/releases/{release["id"]}')
     require(published.get('draft') is False and published.get('tag_name') == request['tag'], 'Release was not published')
     published_files = work / 'published'
     published_files.mkdir()
