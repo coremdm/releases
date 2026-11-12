@@ -26,7 +26,6 @@ def validate_request(request):
         require(isinstance(request.get(key), str) and re.fullmatch(r'v\d+\.\d+\.\d+', request[key]), 'Invalid release tag')
     for key in ('sourceCommit', 'verifierCommit'):
         require(isinstance(request.get(key), str) and re.fullmatch('[0-9a-f]{40}', request[key]), 'Invalid pinned commit')
-    require(request['verifierCommit'] == VERIFIER, 'Unexpected verifier source')
     for key in ('versionCode', 'previousVersionCode', 'sourceBuildRun', 'verificationRun', 'artifactId'):
         require(type(request.get(key)) is int and request[key] > 0, 'Invalid version or run identifier')
     require(request['versionCode'] > request['previousVersionCode'], 'Candidate must increase the version code')

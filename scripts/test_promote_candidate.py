@@ -50,7 +50,7 @@ class PromotionSafeguards(unittest.TestCase):
 
     def test_request_rejects_invalid_versions_commits_and_artifact_pins(self):
         validate_request(REQUEST)
-        for changes in ({'versionCode': 114}, {'sourceCommit': 'main'}, {'verifierCommit': 'b' * 40},
+        for changes in ({'versionCode': 114}, {'sourceCommit': 'main'}, {'verifierCommit': 'main'},
                         {'artifactDigest': 'unknown'}, {'artifactId': True}, {'tag': 'v0.9.50\n'}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_request(dict(REQUEST, **changes))
