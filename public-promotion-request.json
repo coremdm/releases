@@ -1,1 +1,18 @@
-{"tag":"v0.9.50","versionCode":115,"previousTag":"v0.9.49","previousVersionCode":114,"sourceCommit":"4002353da3466d4907b8bc68b32072099ce4ec2c","sourceBuildRun":43223201487,"verifierCommit":"a765da3be98eb5a8376670e246179a8937d81cd1","verificationRun":43225978563,"artifactId":13948036759,"artifactDigest":"sha256:1fc29ecf608fc586f5be4de401c44898e6fb0d93f5301adce41dc62c6ff553ad","transport":"firebase-public-release-artifact","artifactUrl":"https://firebasestorage.googleapis.com/v0/b/techeaz-core-mdm.firebasestorage.app/o/ota-candidates%2Fv0.9.50%2Fc7db9000-62fa-4fd6-8bf6-7020143f97eb%2Fverified-candidate.zip?alt=media&token=e79d8ccc-5bb7-4de5-82a0-3cee9bd8c49c","bucket":"techeaz-core-mdm.firebasestorage.app","objectName":"ota-candidates/v0.9.50/c7db9000-62fa-4fd6-8bf6-7020143f97eb/verified-candidate.zip","stagedAt":"2026-11-12T19:09:14.214Z","stagingCommit":"13783e0f286b845f47df7785913a9170563e6b3c"}
+{
+  "tag": "v0.9.51",
+  "versionCode": 116,
+  "previousTag": "v0.9.50",
+  "previousVersionCode": 115,
+  "sourceCommit": "d45c9e1d6d686aff606591a8d33da409162ee9a0",
+  "sourceBuildRun": 43805935269,
+  "verifierCommit": "fd0e5b338658aa6649e178389d672c79fd3f8384",
+  "verificationRun": 43807078739,
+  "artifactId": 14198324062,
+  "artifactDigest": "sha256:b81be31b50ba24a4cce4d1d3b5e258d4ab0b5670082b76604d68ff6cedb18271",
+  "transport": "firebase-public-release-artifact",
+  "artifactUrl": "https://firebasestorage.googleapis.com/v0/b/techeaz-core-mdm.firebasestorage.app/o/ota-candidates%2Fv0.9.51%2F4b4ffacd-0a3d-4a00-b77e-a6cd0df708e8%2Fverified-candidate.zip?alt=media&token=732d9c8d-b81e-4276-b21e-35e3a588693f",
+  "bucket": "techeaz-core-mdm.firebasestorage.app",
+  "objectName": "ota-candidates/v0.9.51/4b4ffacd-0a3d-4a00-b77e-a6cd0df708e8/verified-candidate.zip",
+  "stagedAt": "2026-11-16T04:57:47.972Z",
+  "stagingCommit": "3a0b87e64aea1c3624a69508232bd17c1b0c85b2"
+}
